@@ -1,15 +1,11 @@
 
 # --- Do not remove these libs ---
 from freqtrade.strategy import IStrategy
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple, Union
 from functools import reduce
 from pandas import DataFrame
 # --------------------------------
 
-import talib.abstract as ta
-import freqtrade.vendor.qtpylib.indicators as qtpylib
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
 from collections import deque
@@ -19,16 +15,21 @@ from collections import deque
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
-from matplotlib.lines import Line2D
 import plotly.graph_objects as go
 import sys
+from freqtrade.persistence import Trade
+from freqtrade.persistence import Order
+
+import logging
 
 from scipy.signal import argrelextrema
 
 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-class Strategy0013(IStrategy):
+
+logger = logging.getLogger('freqtrade')
+
+class Strategy001(IStrategy):
     """
     Strategy 001
     author@: Gerald Lonlas
@@ -58,6 +59,7 @@ class Strategy0013(IStrategy):
     lastStrongLevel = 0
     lastStrongLevelIdx = np.nan
     lastStrongLevelDataFrame = np.nan
+    sig_dir = 'EXIT'
         
     P: int = 14;
     order: int = 5; 
@@ -67,18 +69,23 @@ class Strategy0013(IStrategy):
     # Minimal ROI designed for the strategy.
     # This attribute will be overridden if the config file contains "minimal_roi"
     minimal_roi = {
-        "60":  0.01,
-        "30":  0.03,
-        "20":  0.04,
-        "0":  0.05
+        #"640":  0.01,
+        #"30":  0.03,
+        #"20":  0.04,
+        "0":  1000
     }
 
     # Optimal stoploss designed for the strategy
     # This attribute will be overridden if the config file contains "stoploss"
-    stoploss = -0.10
+    #
+    # stoploss = -0.10
+    stoploss = -1000
+
 
     # Optimal timeframe for the strategy
-    timeframe = '5m'
+    timeframe = '4h'
+    #inf_tf ='15m'
+
 
     # trailing stoploss
     trailing_stop = False
@@ -86,22 +93,23 @@ class Strategy0013(IStrategy):
     trailing_stop_positive_offset = 0.02
 
     # run "populate_indicators" only for new candle
-    process_only_new_candles = True
+    process_only_new_candles = False
 
     # Experimental settings (configuration will overide these if set)
     use_exit_signal = True
-    exit_profit_only = True
-    ignore_roi_if_entry_signal = False
+    exit_profit_only = False
+    ignore_roi_if_entry_signal = True
+    #startup_candle_count = 100
+    position_adjustment_enable = True
 
     # Optional order type mapping
     order_types = {
-        'entry': 'limit',
-        'exit': 'limit',
+        'entry': 'market',
+        'exit': 'market',
         'stoploss': 'market',
         'stoploss_on_exchange': False
     }
     
-
 
     def informative_pairs(self):
         """
@@ -115,6 +123,7 @@ class Strategy0013(IStrategy):
                             ]
         """
         return [("ETH/USDT", "5m"), ("BTC/TUSD", "15m", "spot"), ("BTC/TUSD", "4h", "spot")]
+
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         """
@@ -137,7 +146,12 @@ class Strategy0013(IStrategy):
         #self.getPeaks(dataframe, key='close', order=self.order, K=self.K)
         #self.calcRSI(dataframe, P=self.P)
         #self.getPeaks(dataframe, key='RSI', order=self.order, K=self.K)
-
+        self.getPeaks(dataframe)
+        return dataframe
+    
+    #@informative('15m')
+    def populate_indicators_15m(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
@@ -149,7 +163,7 @@ class Strategy0013(IStrategy):
                 
                 data = dataframe.head(i)
                 if i > self.long_window:
-                    data = data.tail(self.long_window)
+                    data = data.tail(self.long_window) 
 
                 if data is not None and data.size > 2:
 
@@ -193,20 +207,17 @@ class Strategy0013(IStrategy):
                         # self.lastLLIdx = -1
                         #self.lastLLPrice =  self.lastHHPrice
 
-                        print("Uprange [" + str(self.lastHLPrice) + "," + str(self.lastHHPrice) + "] " + str(self.half_level))
+                        print("Uprange [" + str(self.lastHLPrice) + "," + str(self.lastHHPrice) + "] halfprice:" + str(self.half_level))
+                        #if self.sig_dir == 'EXIT':
+                        dataframe.loc[i,  ['enter_long', 'enter_tag']] =  (1, 'HH')
+                        print("Long: [" + str(dataframe.loc[i]["date"]) + "], price: " + str(self.marketPrice) )
+                        self.sig_dir = 'LONG'
 
                         #self.displayCandlesUpTrend(data, hh, hl, self.half_level)
 
                         if self.downTrend and self.lastHHPrice < self.lastHLPrice:  ## (internal structure to ignore)
                             self.upTrend = False
                             self.downTrend = True
-
-                        if position[i-1] == 0:
-                            self.sig_dir = 'LONG'
-                            #signal = SignalEvent(strategy_id, symbol, dt, self.sig_dir, strength)
-                            dataframe.loc[i,'enter_long'] = 1
-                            position[i] = 1
-
                             #self.events.put(signal)
                             #self.bought[symbol] = 'LONG'
 
@@ -220,23 +231,32 @@ class Strategy0013(IStrategy):
                         # self.displayCandlesUpTrend(data, hh, hl, self.half_level)
                         self.breakOfStructureDown = False
                         # override last LL Level as HL of uptrend
+                        #if self.sig_dir == 'EXIT':
+                        #    self.sig_dir = 'LONG'
+                            #signal = SignalEvent(strategy_id, symbol, dt, self.sig_dir, strength)
+                        # dataframe.loc[i,'enter_long'] = 1
+                        #    position[i] = 1
 
-                    if self.upTrend and self.lastLHPrice is not None and self.marketPrice < self.lastHLPrice:  # below last HL
+                    if self.upTrend and self.lastHLPrice is not None and self.marketPrice < self.lastHLPrice:  # below last HL
                         self.upTrend = False
                         self.downTrend = False
                         self.breakOfStructureUP = False
                         self.breakOfStructureDown = True  # liquidity grab if downtrend is not formed
 
-                        self.half_level = self.lastHHPrice - (self.lastHHPrice - self.lastHLPrice) * 0.5
+                        #self.half_level = self.lastHHPrice - (self.lastHHPrice - self.lastHLPrice) * 0.5
                         #self.displayCandlesUpTrend(data, hh, hl, self.half_level)
+                        #if self.sig_dir == 'LONG':
+                        dataframe.loc[i,  ['exit_long', 'exit_tag']] =  (1, 'BOS')
+                        print("LongExit: [" + str(dataframe.loc[i]["date"]) + "], price: " + str(self.marketPrice) )
+                        #self.sig_dir = 'EXIT'
 
-
-                        if position[i-1] == 1:
-                            #self.sig_dir = 'EXIT'
+                        #if self.sig_dir == 'LONG':
+                        # if position[i-1] == 1:
+                        #    self.sig_dir = 'EXIT'
                             #signal = SignalEvent(strategy_id, symbol, dt, self.sig_dir, strength)
                             #self.events.put(signal)
-                            position[i] = 1
-                            dataframe.loc[i, 'exit_long'] = 1
+                        #    position[i] = 1
+                        #    dataframe.loc[i, 'exit_long'] = 1
 
                     # if self.upTrend and self.lastLHPrice is not None and self.marketPrice < self.half_level:  # below last HL
                         # self.displayCandlesUpTrend(data, hh, hl, self.half_level)
@@ -283,30 +303,36 @@ class Strategy0013(IStrategy):
                         # self.lastHHIdx = -1  this breaks last update
                         # self.lastHHPrice = self.lastLLPrice
 
-                        if self.upTrend and self.lastLLPrice > self.lastLHPrice:  # internal Down structure in Uptrend (ignore)
-                            self.downTrend = False
-                            self.upTrend = True
-                            self.breakOfStructureDown = True
-                            self.breakOfStructureUP = False
+                    if self.upTrend and self.lastLLPrice > self.lastLHPrice:  # internal Down structure in Uptrend (ignore)
+                        self.downTrend = False
+                        self.upTrend = True
+                        self.breakOfStructureDown = True
+                        self.breakOfStructureUP = False
 
-                        if self.downTrend and self.marketPrice < self.lastLLPrice:  # current market is below last LL (Sbreak to downside)
-                            self.breakOfStructureDown = True
-                            self.breakOfStructureUP = False
+                    if self.downTrend and self.marketPrice < self.lastLLPrice:  # current market is below last LL (Sbreak to downside)
+                        self.breakOfStructureDown = True
+                        self.breakOfStructureUP = False
 
-                        if self.downTrend and self.lastLLPrice is not None and self.marketPrice > self.lastLHPrice:  # above last HL
-                            self.trendChange = True
-                            self.breakOfStructureUP = False
-                            self.breakOfStructureDown = False
-                            self.upTrend = False
-                            self.downTrend = False
-                            #self.displayCandlesDownTrend(data, ll, lh, self.half_level)
+                    if self.downTrend and self.lastLLPrice is not None and self.marketPrice > self.lastLHPrice:  # above last HL
+                        self.trendChange = True
+                        self.breakOfStructureUP = False
+                        self.breakOfStructureDown = False
+                        self.upTrend = False
+                        self.downTrend = False
+                        #self.displayCandlesDownTrend(data, ll, lh, self.half_level)
+                        #if position[i-1] == 1:
+                           # dataframe.loc[i,'exit_short'] = 1
+                           # position[i] = 1
 
+                    if self.downTrend and self.marketPrice > self.half_level:  # current market is above last HH and No new HH
+                        # Signal to short (push phase of an dowtrend)
+                        # self.displayCandlesDownTrend(data, ll, lh, self.half_level)
+                        self.breakOfStructureUP = False
+                        #self.displayCandlesDownTrend(data, ll, lh, self.half_level)
+                        #if position[i-1] == 0:
+                           # dataframe.loc[i,'enter_short'] = 1
+                           # position[i] = 1
 
-                        if self.downTrend and self.marketPrice > self.half_level:  # current market is above last HH and No new HH
-                            # Signal to short (push phase of an dowtrend)
-                            # self.displayCandlesDownTrend(data, ll, lh, self.half_level)
-                            self.breakOfStructureUP = False
-                            #self.displayCandlesDownTrend(data, ll, lh, self.half_level)
 
 
                 #dataframe['position'] = position
@@ -314,28 +340,101 @@ class Strategy0013(IStrategy):
                 #print(f"result for {metadata['pair']}")
 
                 # Inspect the last 5 rows
-                #print(dataframe.tail())
+                # print(dataframe.tail()) print(dataframe)  dataframe['enter_long'].tolist() dataframe['exit_long'].tolist() 
+                # print(dataframe.columns)
             
         except Exception as e:
+            logger.error(str(e))
+
             print(e.__cause__)
 
-        return dataframe
+        print(f"Generated {dataframe['enter_long'].sum()} entry signals")
+        print(f"Generated {dataframe['exit_long'].sum()} exit signals")
 
-    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
-        """
-        Based on TA indicators, populates the sell signal for the given dataframe
-        :param dataframe: DataFrame
-        :return: DataFrame with buy column
-        """
-        #dataframe.loc[
-        #    (
-        #        qtpylib.crossed_above(dataframe['ema50'], dataframe['ema100']) &
-        #        (dataframe['ha_close'] < dataframe['ema20']) &
-        #        (dataframe['ha_open'] > dataframe['ha_close'])  # red bar
-        #    ),
-        #    'exit_long'] = 1
         return dataframe
     
+    def getPeaks(self, data, key='Close', order=5, K=2):
+        vals = data[key].values
+        hh_idx = self.getHHIndex(vals, order, K)
+        lh_idx = self.getLHIndex(vals, order, K)
+        ll_idx = self.getLLIndex(vals, order, K)
+        hl_idx = self.getHLIndex(vals, order, K)
+
+        data[f'{key}_highs'] = np.nan
+        data[f'{key}_highs'][hh_idx] = 1
+        data[f'{key}_highs'][lh_idx] = -1
+        data[f'{key}_highs'] = data[f'{key}_highs'].ffill().fillna(0)
+        data[f'{key}_lows'] = np.nan
+        data[f'{key}_lows'][ll_idx] = 1
+        data[f'{key}_lows'][hl_idx] = -1
+        data[f'{key}_lows'] = data[f'{key}_highs'].ffill().fillna(0)
+        return data
+
+    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+
+        return dataframe
+
+    def order_filled(self, pair: str, trade: Trade, order: Order, current_time: any, **kwargs) -> None:
+        # Obtain pair dataframe (just to show how to access it)
+        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+        last_candle = dataframe.iloc[-1].squeeze()
+        return None
+    
+    def confirm_trade_entry(self, pair: str, order_type: str, amount: float, rate: float,
+                            time_in_force: str, current_time: any, entry_tag: any,
+                            side: str, **kwargs) -> bool:
+        
+        print(f"Trade Entry {current_time}, amount {amount}, side: {side}")
+        
+        return True 
+    
+    def confirm_trade_exit(self, pair: str, trade: Trade, order_type: str, amount: float,
+                           rate: float, time_in_force: str, exit_reason: str,
+                           current_time: any, **kwargs) -> bool:
+       
+        print(f"Trade Exit {current_time}, reason: {exit_reason}")
+
+    
+        return True
+    
+    
+    def adjust_trade_position(self, trade: Trade, current_time: any,
+                            current_rate: float, current_profit: float,
+                            min_stake: Optional[float], max_stake: float,
+                            current_entry_rate: float, current_exit_rate: float,
+                            current_entry_profit: float, current_exit_profit: float,
+                            **kwargs
+                            ) -> Union[Optional[float], Tuple[Optional[float], Optional[str]]]:
+        
+        # Obtain pair dataframe (just to show how to access it)
+        dataframe, _ = self.dp.get_analyzed_dataframe(trade.pair, self.timeframe)
+        # Only buy when not actively falling price.
+        ##last_candle = dataframe.iloc[-1].squeeze()
+        ##previous_candle = dataframe.iloc[-2].squeeze()
+        #if last_candle['close'] < previous_candle['close']:
+        #    return None
+
+        filled_entries = trade.select_filled_orders(trade.entry_side)
+        count_of_entries = trade.nr_of_successful_entries
+        # Allow up to 3 additional increasingly larger buys (4 in total)
+        # Initial buy is 1x
+        # If that falls to -5% profit, we buy 1.25x more, average profit should increase to roughly -2.2%
+        # If that falls down to -5% again, we buy 1.5x more
+        # If that falls once again down to -5%, we buy 1.75x more
+        # Total stake for this trade would be 1 + 1.25 + 1.5 + 1.75 = 5.5x of the initial allowed stake.
+        # That is why max_dca_multiplier is 5.5
+        # Hope you have a deep wallet!
+        try:
+            # This returns first order stake size
+            stake_amount = filled_entries[0].stake_amount
+            # This then calculates current safety order size
+            stake_amount = stake_amount * (1 + (count_of_entries * 0.25))
+            return stake_amount, '1/3rd_increase'
+        except Exception as exception:
+            return None
+        
+        return None
+     
     def getHigherLows(self, data: np.array, order=5, K=2):
         '''
         Finds consecutive higher lows in price pattern.
